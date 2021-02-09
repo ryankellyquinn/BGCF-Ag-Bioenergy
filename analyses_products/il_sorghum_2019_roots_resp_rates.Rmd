@@ -1,0 +1,150 @@
+ ---
+title: "Rrsp/g dry RBM/day (IA mxg)"
+author: "Ryan Quinn"
+date: "March 7, 2020"
+output: html_document
+---
+
+**Part 1: Data Cleaning and Early Exploration**
+
+NOTES:
+  -Negative resp. rates are the result of a faulty GC @ time sample was pulled- they're false values and not representative of real data. Therefore, they're removed from the dataset before removing outliers. 
+
+-Load libraries
+-Load functions called throughout script
+-Load data 
+```{r}
+library(readr)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(viridis)
+se.error <- function(x)sd(x)/sqrt(length(x)) #calculate SE during data aggregation 
+pd <- position_dodge(width = 1) #position error bars on  figures
+il <- read_csv("C:/Users/ryan_/OneDrive/Desktop/r scripts/root respiration rates - 11082020/il_sorghum2019_root respiration rates_downloaded from CABBI zipfile.csv")
+```
+
+-Switch lbs/acre to kg/ha if applicable (units depend on what the report is for!)
+```{r}
+#switch fertilization labels from lbs/acre to kg/ha
+il$Fertilization_level <- ifelse(il$Fertilization_level ==0, "0", 
+                           ifelse(il$Fertilization_level == 100, "112",
+                                  ifelse(il$Fertilization_level == 50, "56",
+                                         ifelse(il$Fertilization_level ==150, "168", 
+                                                "WHAT"))))
+```
+
+
+-Remove missing datapoints, visualize 
+      (REMEMBER: "Missing" datapoints in resp_day_avg are because some plots the root sample was divided into 2 for lab            replication, and these lab replicates need to be avg'd together to avoid psuedoreplication. This is not the case on 7/12, when only 1 lab sample/plot existed but was the case for 7/31).
+-Remove outliers, revisualize
+      Keep outlier, after closer inspection is appears to be a "real" CO2 flux, albeit a little wonky
+```{r}
+nrow(il)
+#ia$co2 <- ifelse(ia$co2 == "Delete", NA, ia$co2)
+il <- na.omit(il) 
+nrow(il) 
+par(mfrow=c(2,2))
+boxplot(as.numeric(as.numeric(il$resp_day_avg)))
+plot(il$resp_day_avg)
+hist(il$resp_day_avg)
+
+boxplot(il$resp_day_avg, plot=FALSE)$out #identify outliers
+outliers <- boxplot(il$resp_day_avg, plot=FALSE)$out #assign outliers to a vector
+print(outliers) #check the output matches those identified above
+il[which(il$resp_day_avg %in% outliers),] #find rows outliers are in 
+il2 <- il[-which(il$resp_day_avg %in% outliers),] #remove rows with outliers
+nrow(il2) 
+par(mfrow=c(2,2))
+boxplot(il2$resp_day_avg)
+plot(il2$resp_day_avg)
+hist(il2$resp_day_avg)
+```
+
+-Define model variables
+-Explore relationship between dependent and independent variables
+```{r}
+nrate <- as.factor(il$Fertilization_level)
+date <- as.factor(il$Incubation_date)
+co2 <- as.numeric(il$resp_day_avg)
+par(mfrow=c(2,2))
+boxplot(co2~nrate)
+boxplot(co2~date)
+boxplot(co2~nrate + date) #interesting! 
+mean(co2) #boring avg is a product of boring data :/ 
+```
+
+-Explore distribution of logged vs. unlogged data 
+```{r}
+log_co2 <- log(co2)
+par(mfrow=c(1,2))
+plot(density.default(x = co2))  
+plot(density.default(x=log_co2))
+```
+
+**Part 2: Statistical Analyses**
+
+-Define model, explore residuals
+```{r}
+ia.mod <- lmer(co2 ~ nrate + (1|date)) 
+par(mfrow=c(1,2))
+plot(ia.mod)
+qqnorm(resid(ia.mod)) 
+z <- car :: Anova(ia.mod)
+print(z)
+```
+
+**Part 3: Data Summary Statistics and Visualization**
+
+-Aggregate by: NRATE
+```{r}
+rsp.n <- il %>% group_by(Fertilization_level) %>% summarize(mean = mean(as.numeric(`resp_day_avg`)), 
+                                    se = se.error(`resp_day_avg`), 
+                                    n = length(`resp_day_avg`))
+```
+
+-Bar plot of sorghum mean root respiration rates +/- SE among different fertilization levels (kg/ha)
+```{r}
+positions <- c("0", "56", "112", "168")
+
+ggplot(rsp.n, aes(x=Fertilization_level, y=mean))+
+  geom_col(position = "dodge")+theme_classic(base_size = 16)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4)+
+  scale_x_discrete(expression("N fertilization "(kg~ha^-1)), limits=positions)+
+  scale_y_continuous(expression("root respiration rate " (mg~C-CO[2]~g^-1~dry~root~ biomass~day^-1)), breaks=seq(0,25,6), limits = c(0,25), expand = c(0,0))+theme(axis.title.y = element_text(size = 10))
+```
+
+
+-Anova summary and summary stats by fertilization level into CSVs
+***Don't run unless you want to rewrite .csv, which may or may not have edits
+```{r}
+#write.csv(z, file = "E://results//ia_mxg_resp_anova.csv")
+#write.csv(rsp.n, file = "E://results//ia_mxg_resp_anova.csv")
+```
+
+**PART 4: Wrangle data for comparison of mean root resp (all fertilization levels grouped, and just controls ( 0 kg/ha))**
+**eventually move this into another spreadsheet, call this spreadsheet before combining the data. 
+
+-Calc. mean +/- SE for root respiration g/fine root biomass in all Sorghum plots over all fertilization levels and sampling dates
+```{r}
+rsp.srg <- NA
+rsp.srg <- as.data.frame(rsp.srg) 
+rsp.srg$mean <-  mean(co2)
+rsp.srg$n <- length(co2)
+rsp.srg$se <- se.error(co2)
+rsp.srg$crop <- "Sorghum"
+rsp.srg #check it out. 
+```
+
+-Calc. mean +/- SE of CONTROLS for root respiration g/fine root biomass in Sorghum across all sampling dates 
+```{r, echo = FALSE}
+control.resp <- subset(il, il$Fertilization_level == 0)
+rsp.0 <- as.numeric(control.resp$resp_day_avg)
+rsp.srg.0 <- NA
+rsp.srg.0 <- as.data.frame(rsp.srg.0) 
+rsp.srg.0$mean <-  mean(rsp.0)
+rsp.srg.0$n <- length(rsp.0)
+rsp.srg.0$se <- se.error(rsp.0)
+rsp.srg.0$crop <- "Sorghum"
+rsp.srg.0
+```

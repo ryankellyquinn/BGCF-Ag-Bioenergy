@@ -1,0 +1,158 @@
+ ---
+title: "Rrsp/g dry RBM/day (IA mxg)"
+author: "Ryan Quinn"
+date: "March 7, 2020"
+output: html_document
+---
+
+**Part 1: Data Cleaning and Early Exploration**
+
+NOTES:
+  -Negative resp. rates are a data recording mistake @ time sample was pulled- they're false values and not representative of real data. Therefore, they're removed from the dataset before removing outliers.
+
+-Load libraries
+-Load functions called throughout script
+-Load data
+```{r}
+library(readr)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(viridis)
+library(dplyr)
+se.error <- function(x)sd(x)/sqrt(length(x)) #calculate SE during data aggregation 
+pd <- position_dodge(width = 1) #position error bars on figures
+ia <- read_csv("C:/Users/ryan_/OneDrive/Desktop/r scripts/root respiration rates - 11082020/ia_mxg2019_root respiration rates_ downloaded from CABBI zipfile.csv")
+```
+
+-Remove missing datapoints, explore the data 
+-Remove outliers (there's two outliers that must be removed, they're obviously not real data. The roots are not emitting more CO2 than the total weight of roots in the jar), revisualize
+```{r}
+nrow(ia)
+#ia$co2 <- ifelse(ia$co2 == "Delete", NA, ia$co2)
+ia <- na.omit(ia) 
+nrow(ia) 
+par(mfrow=c(2,2))
+boxplot(as.numeric(ia$respiration_day_avg_of_reps))
+plot(ia$respiration_day_avg_of_reps)
+hist(ia$respiration_day_avg_of_reps)
+boxplot(ia$respiration_day_avg_of_reps, plot=FALSE)$out #identify outliers
+outliers <- boxplot(ia$respiration_day_avg_of_reps, plot=FALSE)$out #assign outliers to a vector
+print(outliers) #check the output matches those identified above
+ia[which(ia$respiration_day_avg_of_reps %in% outliers),] #find rows outliers are in 
+ia <- ia[-which(ia$respiration_day_avg_of_reps %in% outliers),] #remove rows with outliers
+nrow(ia) 
+par(mfrow=c(2,2))
+boxplot(ia$respiration_day_avg_of_reps)
+plot(ia$respiration_day_avg_of_reps)
+hist(ia$respiration_day_avg_of_reps)
+mean(ia$respiration_day_avg_of_reps)
+```
+
+Switch fertilization labels from lbs/acre to kg/ha (depends on what you're presenting for, usually kg/ha but not if talking to US farmers)
+```{r}
+ia$nrate <- ifelse(ia$fertilization_level ==0, "0", 
+                           ifelse(ia$fertilization_level ==100, "112",
+                                  ifelse(ia$fertilization_level ==200, "224",
+                                         ifelse(ia$fertilization_level ==300, "336", "WHAT"))))
+```
+
+-Define model variables
+-Explore relationship between dependent and independent variables
+```{r}
+age <- as.factor(ia$planting_year)
+nrate <- as.factor(ia$nrate)
+date <- as.factor(ia$incubation_date)
+block <- as.factor(ia$BLOCK)
+co2 <- as.numeric(ia$respiration_day_avg_of_reps)
+par(mfrow=c(2,2))
+boxplot(co2~age)
+boxplot(co2~nrate)
+boxplot(co2~date)
+boxplot(co2~block)
+```
+
+-Explore distribution of logged vs. unlogged data 
+```{r}
+log_co2 <- log(co2)
+par(mfrow=c(1,2))
+plot(density.default(x = co2))  
+plot(density.default(x=log_co2))
+```
+
+**Part 2: Statistical Analyses**
+
+-Define model, explore residuals
+```{r}
+ia.mod <- lmer(co2 ~ nrate * age + (1|date) + (1|block)) 
+par(mfrow=c(1,2))
+plot(ia.mod)
+qqnorm(resid(ia.mod)) 
+qqline(resid(ia.mod)) 
+z <- car :: Anova(ia.mod)
+print(z) 
+#write.csv(z, file = "results/mxg_resp_rate_anova.csv")
+```
+
+**Part 3: Data Summary Statistics and Visualization**
+
+-Plot by: AGE
+```{r}
+rsp.a <- ia %>% group_by(planting_year) %>% summarize(mean = mean(as.numeric(respiration_day_avg_of_reps)), 
+                                    se = se.error(respiration_day_avg_of_reps), 
+                                    n = length(respiration_day_avg_of_reps))
+
+ggplot(rsp.a, aes(x=planting_year, y=mean))+
+  geom_col(position = "dodge")+theme_classic(base_size = 16)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_continuous("Establishment year")+
+ scale_y_continuous(expression("Root respiration rate " (mg~C-CO[2]~g^-1~dry~root~ biomass~day^-1))+theme(axis.title.y = element_text(size = 10)))
+#, fill="goldenrod2"
+```
+
+Plot by: NRATE   
+```{r}
+rsp.n <- ia %>% group_by(nrate) %>% summarize(mean = mean(as.numeric(respiration_day_avg_of_reps)), 
+                                    se = se.error(respiration_day_avg_of_reps), 
+                                    n = length(respiration_day_avg_of_reps))
+
+ggplot(rsp.n, aes(x=nrate, y=mean))+
+  geom_col(position = "dodge")+theme_classic(base_size = 16)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_discrete(expression("N fertilization "(kg~N~ha^-1~yr^-1)))+
+  scale_y_continuous(expression("Root respiration rate " (mg~C-CO[2]~g^-1~dry~root~ biomass~day^-1)), breaks=seq(0,25,6), limits = c(0,25), expand = c(0,0))+theme(axis.title.y = element_text(size = 10)) 
+
+ggplot(rsp.n, aes(x=nrate, y=mean))+
+  geom_col(position = "dodge", fill = "goldenrod2")+theme_classic(base_size = 16)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_discrete(expression("N fertilization "(kg~N~ha^-1~yr^-1)))+
+  scale_y_continuous(expression("Root respiration rate " (mg~C-CO[2]~g^-1~dry~root~ biomass~day^-1))+theme(axis.title.y = element_text(size = 10)))
+```                                     
+
+**PART 4: Wrangle data for comparison of mean root resp (all fertilization levels grouped, and just controls ( 0 kg/ha))**
+**eventually move this into another spreadsheet, call this spreadsheet before combining the data. 
+
+-Calc. mean +/- SE for root respiration g/fine root biomass in all Miscanthus plots over all fertilization levels and sampling dates
+```{r}
+rsp.mxg <- NA
+rsp.mxg <- as.data.frame(rsp.mxg) 
+rsp.mxg$mean <-  mean(co2)
+rsp.mxg$n <- length(co2)
+rsp.mxg$se <- se.error(co2)
+rsp.mxg$crop <- "Miscanthus"
+rsp.mxg
+```
+
+-Calc. mean +/- SE of 0 kg/ha fertilization level for root respiration g/fine root biomass in Miscanthus across all sampling dates 
+```{r}
+control.resp.mxg <- subset(ia, ia$fertilization_level == 0)
+resp.0.mxg <- as.numeric(control.resp.mxg$respiration_day_avg_of_reps)
+
+rsp.mxg.0 <- NA
+rsp.mxg.0 <- as.data.frame(rsp.mxg.0) 
+rsp.mxg.0$mean <-  mean(resp.0.mxg)
+rsp.mxg.0$n <- length(resp.0.mxg)
+rsp.mxg.0$se <- se.error(resp.0.mxg)
+rsp.mxg.0$crop <- "Miscanthus"
+rsp.mxg.0
+```

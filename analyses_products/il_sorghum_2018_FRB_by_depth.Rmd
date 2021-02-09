@@ -1,0 +1,197 @@
+---
+title: "Fine root biomass - sorghum -  IL"
+author: "Ryan Quinn"
+date: "March 22, 2020"
+output: html_document
+---
+
+**Part 1: Data Cleaning and Early Exploration**
+
+**Notes**: 
+  -Earlier data exploration examined the effects of outlier removal on the model. Removing outliers removes three datapoints all from the 0 kg/ha fertilization level (nrate). Through expert elication we decided the datapoints were "real" data and represent logical amounts of fine RB expected in the 0 fertilization level.
+  -For the purposes of streamlining publication, only data with statistical significance is visualized 
+  -This data IS NOT PUBLICALLY AVAILABLE and will not be until the publication is in press. However, these scripts may help someone currently processing soil C flux data. 
+
+-Load libraries
+-Define functions needed throughout script
+-Load data, remove missing datapoints
+-Basic exploration of data distribution, shape, etc. 
+```{r}
+library(readr)
+library(lmerTest)
+library(emmeans)
+library(ggplot2) 
+#library(viridis) #went with colorcoding by x variable instead of colorblind friendly for presentation b/c nobody on committee colorblind
+library(plyr) #must unload this before using dplyr
+library(dplyr) #summary statistics 
+
+
+se.error <- function(x)sd(x)/sqrt(length(x)) #calculate SE during data aggregation 
+sumstat <- function(x) c(mean(x), se.error(x), length((x)))
+pd <- position_dodge(width = 1) #position error bars on  figures
+
+il <- read_csv("C:/Users/ryan_/OneDrive/Desktop/r scripts/root biomass - 11082020/il_sorghum2018_root biomass.csv") 
+
+nrow(il) #240 rows before removing missing datapoints
+il <- na.omit(il)
+nrow(il) #200 rows once the missing values are removed from the dataset (the "missing data" is not actually missing but was never collected purposefully for a variety of reasons specific to the experiment, and/or the data collected was not accurately labels (no plot #, etc.)).
+par(mfrow=c(2,2))
+plot(as.numeric(il$`theoretical fine roots (g/m^2)`))
+boxplot(as.numeric(il$`theoretical fine roots (g/m^2)`)) #3 outliers 
+hist(as.numeric(il$`theoretical fine roots (g/m^2)`))
+```
+
+-Change nrate from lbs/acre/yr to Kg/ha/yr
+```{r}
+il$nrate <- ifelse(il$`fertilization level (lbs/acre)` ==0, "0", 
+                           ifelse(il$`fertilization level (lbs/acre)` ==150, "168", "WHAT"))
+```
+
+-Subset data for statistical anayses 
+    MUCH easier to make new df w/ desired columns than delete unnecessary columns + you can add a column back if necessary
+-Rename columns for convenience 
+```{r}
+il2 <- (il[, c("interrow (IR)/intrarow (OR)", "genotype", "nrate","theoretical depth (cm)", "theoretical fine roots (g/m^2)")])
+#il2 <- as.data.frame(rename(il2, c("interrow (IR)/intrarow (OR)" = "row", "nrate" = "nrate", "theoretical fine roots (g/m^2)" = "rb", "theoretical depth (cm)" = "depth", "genotype" = "genotype")))
+names(il2)[names(il2) == "interrow (IR)/intrarow (OR)"] <- "row" 
+names(il2)[names(il2) == "theoretical depth (cm)"] <- "depth"  
+names(il2)[names(il2) == "theoretical fine roots (g/m^2)"] <- "rb"  
+
+```
+
+
+-Define model variables
+-Explore relationship between dependent and independent variables
+```{r}
+depth <- as.factor(il2$depth)
+genotype <- as.factor(il2$genotype)
+nrate <- as.factor(il2$nrate)
+row <- as.factor(il2$row)
+rb <- as.numeric(il2$rb)
+par(mfrow=c(2,2))
+boxplot(rb~depth) #fix this x axis
+
+boxplot(rb~nrate) 
+boxplot(rb~genotype) 
+boxplot(rb~row)
+```
+
+-Explore distribution of logged vs. unlogged data
+```{r}
+log.rb <- log(rb)
+par(mfrow=c(1,2))
+plot(density.default(x = rb)) #left-skewed 
+plot(density.default(x=log.rb))  
+```
+
+**Part 2: Statistical Analyses**
+
+
+-Define model and explore residuals
+```{r}
+il.mod <- lm(rb ~ nrate * row * genotype * depth) 
+qqnorm(resid(il.mod)) 
+qqline(resid(il.mod)) 
+```
+
+```{r}
+z <- car :: Anova(il.mod)
+print(z)
+```
+
+-Anova summary into CSV
+-Pairwise comparisons 
+***Don't run unless you want to 
+  1) Rewrite .csv, which may or may not have edits
+  2) Wait for pairwise comps. to run which takes forever and output is useless (run chunk by chunk!)
+  
+```{r, eval=F, echo=T}
+#write.csv(z, file = "E://results//ia_mxg_finebm_anova.csv")
+emmeans(il.mod, pairwise ~ depth) 
+emmeans(il.mod, pairwise ~ genotype) 
+emmeans(il.mod, pairwise ~ row) 
+emmeans(il.mod, pairwise ~ depth | row) 
+emmeans(il.mod, pairwise ~ row | depth)
+```
+
+**Part 3: Data Summary Statistics and Visualization**
+                                                
+```{r}
+detach(package:plyr) #if you don't run this, the dplyr summarization tables don't group
+```                              
+#row.m <- as.data.frame(do.call( rbind, tapply(rb, list(row), sumstat))) #alternative method to summarize data 
+
+*IND VARIABLE = ROW LOCATION*
+-Aggregate data by row
+-Rename x-axis labels for plot
+-Plot fine root biomass by row location
+```{r}
+df.r <- il2 %>% group_by(row) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+df.r$row <- ifelse(df.r$row == "IR", "Inter-row",
+                   ifelse(df.r$row == "OR", "Intra-row", "WHAT"))
+
+ggplot(df.r, aes(x=row, y=mean))+
+  geom_col(fill = "seagreen4")+theme_classic(base_size = 13)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_discrete("Row location")+scale_y_continuous(expression("Fine root biomass "(g~m^2)), breaks=seq(0,40,10), limits = c(0,40), expand = c(0,0))
+```
+
+*IND VARIABLE = DEPTH*
+-Aggregate data by depth
+-Plot fine root biomass by depth
+```{r}
+df.d <- il2 %>% group_by(depth) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+ggplot(df.d, aes(x=depth, y=mean))+
+  geom_col(fill = "seagreen4")+theme_classic(base_size = 13)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_discrete("Soil depth (cm)")+scale_y_continuous(expression("Fine root biomass "(g~m^2)), breaks=seq(0,80,10), limits = c(0,80), expand = c(0,0))
+```
+
+*IND VARIABLE = GENOTYPE*
+-Aggregate data by genotype
+-Plot fine root biomass by genotype
+```{r}
+df.g <- il2 %>% group_by(genotype) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+ggplot(df.g, aes(x=genotype, y=mean))+
+  geom_col(fill = "seagreen4")+theme_classic(base_size = 13)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_discrete("Soil depth (cm)")+scale_y_continuous(expression("Fine root biomass "(g~m^2)), breaks=seq(0,40,10), limits = c(0,40), expand = c(0,0))
+```
+
+*IND VARIABLE = Row x Depth*
+-Aggregate data by genotype
+-Plot fine root biomass by genotype
+```{r}
+df.dr <- il2 %>% group_by(row, depth) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+ggplot(df.dr, aes(x=depth, y=mean, fill=(row)))+
+geom_col(position="dodge")+theme_classic(base_size = 16)+
+geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4, position = pd)+
+    xlab("Soil depth (cm)")+scale_y_continuous(expression("Fine root biomass "~(g~m^-2)), breaks=seq(0,500,20), expand = c(0,0))+theme(legend.justification = "top")+theme(legend.background = element_rect(linetype = 1, size = 0.5, colour = 1))+scale_fill_manual(values = c("seagreen1","seagreen4"),"Row location")
+
+write.csv(df.dr, file = "E://results//frb_row_depth.csv")
+
+```
+
+*IND VARIABLE = Nrate x Depth*
+-Aggregate data by genotype
+-Plot fine root biomass by genotype
+```{r}
+df.dn <- il2 %>% group_by(nrate, depth) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+ggplot(df.dn, aes(x=depth, y=mean, fill=(as.character(nrate))))+
+geom_col(position="dodge")+theme_classic(base_size = 16)+
+geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4, position = pd)+
+    xlab("Soil depth (cm)")+scale_y_continuous(expression("Fine root biomass "~(g~m^-2)), breaks=seq(0,500,20), expand = c(0,0))+theme(legend.justification = "top")+theme(legend.background = element_rect(linetype = 1, size = 0.5, colour = 1))+scale_fill_manual(values = c("seagreen1","seagreen4"),expression("N fertilization level "(~kg~ha^-1)))
+```

@@ -1,0 +1,198 @@
+---
+title: "RB-Fine (IL srg)"
+author: "Ryan Quinn"
+date: "March 22, 2020"
+output: html_document
+---
+
+**Part 1: Data Cleaning and Early Exploration**
+
+Notes: 
+  -Earlier data exploration examined the effects of outlier removal on the model. Removing outliers removes most 0-10cm depth bm datapoints So, we do not remove outliers for this analysis. 
+
+-Load libraries
+-Define functions needed throughout script
+-Load data, remove missing datapoints (Empty cells with "Delete" are not missing data, but a code to delete cells which must remain filled for other analyses where we're looking at depth distribution and not total FRB in 1m)
+```{r}
+library(readr)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+library(dplyr) #summary statistics 
+library(viridis)
+se.error <- function(x)sd(x)/sqrt(length(x)) #calculate SE during data aggregation 
+pd <- position_dodge(width = 1) #position error bars on  figures
+il <- read_csv("C:/Users/ryan_/OneDrive/Desktop/r scripts/root biomass - 11082020/il_sorghum2018_root biomass.csv")
+il$`theoretical fine roots in 1m (g/m^2)` <- ifelse(il$`theoretical fine roots in 1m (g/m^2)` == "Delete", NA, il$`theoretical fine roots in 1m (g/m^2)`)
+```
+
+-Early data exploration 
+```{r}
+nrow(il) 
+il <- na.omit(il)
+nrow(il)
+par(mfrow=c(2,2))
+plot(as.numeric(il$`theoretical fine roots in 1m (g/m^2)`))
+boxplot(as.numeric(il$`fine roots in sample (g/m^2)`))
+hist(as.numeric(il$`fine roots in sample (g/m^2)`))
+```
+
+-Change nrate from lbs/acre/yr to Kg/ha/yr
+```{r}
+#switch fertilization labels from lbs/acre to kg/ha
+il$nrate <- ifelse(il$`fertilization level (lbs/acre)` ==0, "0", 
+                           ifelse(il$`fertilization level (lbs/acre)` ==150, "168", "WHAT"))
+```
+
+-Subset data for statistical anayses 
+    MUCH easier to make new df w/ desired columns than delete unnecessary columns + you can add a column back if necessary
+-Rename columns for convenience 
+```{r}
+il2 <- (il[, c("theoretical fine roots in 1m (g/m^2)", "nrate", "interrow (IR)/intrarow (OR)", "genotype")])
+names(il2)[names(il2) == "interrow (IR)/intrarow (OR)"] <- "row" 
+names(il2)[names(il2) == "theoretical fine roots in 1m (g/m^2)"] <- "rb" 
+```
+
+-Define model variables
+-Explore relationship between dependent and independent variables
+```{r}
+nrate <- as.factor(il$nrate)
+rb <- as.numeric(il$`theoretical fine roots in 1m (g/m^2)`)
+genotype <- as.factor(il$genotype)
+row <- as.factor(il$`interrow (IR)/intrarow (OR)`)
+par(mfrow=c(2,2))
+boxplot(rb~nrate)
+boxplot(rb~genotype)
+boxplot(rb~row)
+```
+
+-Explore distribution of logged vs. unlogged data
+```{r}
+log.rb <- log(rb)
+par(mfrow=c(2,2))
+plot(density.default(x = rb)) #left-skewed 
+plot(density.default(x=log.rb)) #good 
+```
+
+**Part 2: Statistical Analyses**
+
+-Define model and explore residuals
+```{r}
+il.mod <- lm(log.rb ~ nrate * row * genotype) 
+par(mfrow=c(2,2))
+qqnorm(resid(il.mod)) 
+qqline(resid(il.mod)) 
+```
+
+```{r}
+z <- car :: Anova(il.mod)
+print(z)
+```
+
+-Anova summary into CSV
+-Pairwise comparisons 
+***Don't run unless you want to 
+  1) Rewrite .csv, which may or may not have edits
+  2) Wait for pairwise comps. to run which takes forever and output is useless (run chunk by chunk!)
+  reval=F, echo=T}
+```{r}
+#write.csv(z, file = "results/mxg_frb_anova.csv") #change this pathway when data is publically availabel to write into 
+emmeans(il.mod, pairwise ~ genotype) 
+emmeans(il.mod, pairwise ~ depth | year)  
+emmeans(il.mod, pairwise ~ row) 
+emmeans(il.mod, pairwise ~ depth | row) 
+emmeans(il.mod, pairwise ~ row | depth)
+```
+
+**Part 3: Data Summary Statistics and Visualization**
+
+**IND VARIABLE = row location**
+-Aggregate data by location to plant within/outside plant row
+-Plot
+```{r}
+df.r <- il2 %>% group_by(row) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+df.r$row <- ifelse(df.r$row == "IR", "Inter",
+                   ifelse(df.r$row == "OR", "Intra", "WHAT"))
+
+ggplot(df.r, aes(x=row, y=mean))+
+  geom_col(position = "dodge")+theme_classic(base_size = 13)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4)+
+  scale_x_discrete("Proximity to plant row")+scale_y_continuous(expression("Fine root biomass "(g~m^-2)), breaks=seq(0,500,40), expand = c(0,0))#+scale_fill_manual(values = c("seagreen4","seagreen4"))
+```
+
+**IND VARIABLE = GENOTYPE**
+-Aggregate data by genotype
+-Plot
+```{r}
+df.g <- il2 %>% group_by(genotype) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+ggplot(df.g, aes(x=genotype, y=mean))+
+  geom_col(position = "dodge", fill="seagreen4")+theme_classic(base_size = 16)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4)+
+  scale_x_discrete("Genotype")+scale_y_continuous(expression("Fine root biomass "(g~m^-2)), breaks=seq(0,500,40), expand = c(0,0))
+#write.csv(df.g, file = "E://results//sorg_frb_geno_1m.csv") 
+```
+
+**IND VARIABLE = FERTILIZATION LEVEL**
+-Aggregate data by fertiization level
+-Plot
+```{r}
+df.n <- il2 %>% group_by(nrate) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+ggplot(df.n, aes(x=nrate, y=mean))+
+  geom_col(position = "dodge", fill="seagreen4")+theme_classic(base_size = 13)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4)+
+  scale_x_discrete(expression("N fertilization" ~(kg~ha^-1~yr^-1)))+scale_y_continuous(expression("Fine root biomass "~(g~m^-2)), breaks=seq(0,500,30), expand = c(0,0))
+```
+
+**IND VARIABLE = FERTILIZATION LEVEL x ROW **
+-Aggregate data by fertiization level x row location
+-Plot
+```{r}
+df.n <- il2 %>% group_by(nrate, row) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+df.r$row <- ifelse(df.r$row == "IR", "Inter",
+                   ifelse(df.r$row == "OR", "Intra", "WHAT"))
+
+ggplot(df.n, aes(nrate, mean, fill=(row)))+
+geom_col(position="dodge")+theme_classic(base_size = 13)+
+          scale_fill_viridis(expression("Row proximity"), discrete = T, direction = -1, option = "viridis")+
+geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.3, position = pd)+
+    scale_x_discrete(expression("N fertilization "(kg~ha^-1~yr^1)))+
+                       scale_y_continuous(expression("fine root biomass "~(g~m^-2)), breaks=seq(0,1000,100), expand = c(0,0))+theme(legend.justification = "top")
+```
+
+**PART 4: Wrangle data for comparison of mean root resp (all fertilization levels grouped, and just controls ( 0 kg/ha))**
+**eventually move this into another spreadsheet, call this spreadsheet before combining the data. 
+
+-Calc. g mean +/- SE frb in all Sorghum plots over all fertilization levels and sampling dates
+```{r}
+srg.frb <- NA
+srg.frb <- as.data.frame(srg.frb) 
+srg.frb$mean <- mean(as.numeric(il2$rb))
+srg.frb$n <- length(il2$rb)
+srg.frb$se <- se.error(il2$rb)
+srg.frb$crop <- "Sorghum"
+srg.frb
+```
+
+-Calc. mean +/- SE of 0 kg/ha fertilization level for g fine root biomass in Sorghum across all sampling dates 
+```{r}
+frb.0.srg <- subset(il2, il2$nrate == 0)
+frb.0.srg <- as.numeric(frb.0.srg$rb) #get rid of everything else in df, only need frb 
+
+frb.srg.0 <- NA
+frb.srg.0 <- as.data.frame(frb.srg.0) 
+frb.srg.0$mean <-  mean(frb.0.srg)
+frb.srg.0$n <- length(frb.0.srg)
+frb.srg.0$se <- se.error(frb.0.srg)
+frb.srg.0$crop <- "Sorghum"
+frb.srg.0
+```

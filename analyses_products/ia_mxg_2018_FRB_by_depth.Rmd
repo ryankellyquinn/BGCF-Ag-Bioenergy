@@ -1,0 +1,212 @@
+---
+title: "Fine root biomass - Miscanthus x giganteus - IA"
+author: "Ryan Quinn"
+date: "March 7, 2020"
+output: html_document
+---
+
+**Part 1: Data Cleaning and Early Exploration**
+
+**Notes:** 
+  -Earlier data exploration examined the effects of outlier removal on the model. Removing outliers removes most 0-10cm depth bm datapoints. So, we do not remove outliers for this analysis. 
+  -This data IS NOT PUBLICALLY AVAILABLE and will not be until the publication is in press. However, these scripts may help someone currently processing soil C flux data. 
+
+
+-load libraries
+-Define functions needed throughout script
+-Load data, remove missing datapoints
+-Basic exploration of data distribution, shape, etc. 
+```{r}
+library(readr)
+library(lmerTest)
+library(emmeans)
+library(ggplot2)
+#library(viridis) #went with colorcoding by x variable instead of colorblind friendly for presentation b/c nobody on committee colorblind
+library(dplyr) #summary statistics 
+
+se.error <- function(x)sd(x)/sqrt(length(x)) #calculate SE during data aggregation 
+pd <- position_dodge(width = 1) #position error bars on  figures
+
+ia <- read_csv("C:/Users/ryan_/OneDrive/Desktop/r scripts/root biomass - 11082020/ia_mxg2018_root biomass.csv")
+
+nrow(ia) #310 datapoints
+ia <- na.omit(ia) 
+nrow(ia) #290- these removed points are mostly due to unlabeled samples which must be discarded and not used in analyses. 
+par(mfrow=c(2,2))
+plot(as.numeric(ia$`theoretical fine roots (g/m^2)`), ylab = expression("fine root biomasss "~g~m^2))
+boxplot(as.numeric(ia$`theoretical fine roots (g/m^2)`), ylab = expression("fine root biomasss "~g~m^2))
+hist(as.numeric(ia$`theoretical fine roots (g/m^2)`), xlab = expression("fine root biomasss "~g~m^2), main = "histogram")
+```
+
+-Change nrate from lbs/acre/yr to Kg/ha/yr
+-Change depth key to something informative
+```{r}
+#switch fertilization labels from lbs/acre to kg/ha
+ia$nrate <- ifelse(ia$`fertilization_.level (lbs/acre)` ==0, "0", 
+                           ifelse(ia$`fertilization_.level (lbs/acre)` ==100, "112",
+                                  ifelse(ia$`fertilization_.level (lbs/acre)` ==200, "224",
+                                         ifelse(ia$`fertilization_.level (lbs/acre)` ==300, "336", 
+                                                ifelse(ia$`fertilization_.level (lbs/acre)` ==400, "448", "WHAT")))))
+#make depth increments easier to comprehend
+ia$depth.key <- ifelse(ia$depth.key ==10, "0-10", 
+                             ifelse(ia$depth.key ==20, "10-20",
+                                    ifelse(ia$depth.key ==30, "20-30",
+                                           ifelse(ia$depth.key ==50, "30-50", 
+                                                  ifelse(ia$depth.key ==100, "50-100", "WHAT")))))
+```
+
+-Subset data for statistical anayses 
+    MUCH easier to make new df w/ desired columns than delete unnecessary columns + you can add a column back if necessary
+-Rename columns for convenience 
+```{r}
+ia2 <- (ia[, c("planting.year", "block","depth.key", "theoretical fine roots (g/m^2)", "nrate")])
+names(ia2)[names(ia2) == "planting.year"] <- "age" 
+names(ia2)[names(ia2) == "depth.key"] <- "depth" 
+names(ia2)[names(ia2) == "theoretical fine roots (g/m^2)"] <- "rb" 
+```
+
+-Define model variables
+-Explore relationship between dependent and independent variables
+```{r}
+#ia <- subset(ia, select= -c(ia$planting_year == "2015" & ia$depth.key == "50-100"))
+age <- as.factor(ia2$age)
+nrate <- as.factor(ia2$nrate)
+depth <- as.factor(ia2$depth)
+rb <- as.numeric(ia2$rb)
+block <- as.numeric(ia2$block)
+par(mfrow=c(2,2))
+boxplot(rb~nrate, ylab=expression("fine root biomass "~(g~m^2)), xlab=expression("fertilization level "~(kg~ha^-1)))
+boxplot(rb~age, ylab=expression("fine root biomass "~(g~m^2)), xlab="planting year")
+boxplot(rb~block, ylab=expression("fine root biomass "~(g~m^2)), xlab="block")
+boxplot(rb~depth, lab=expression("fine root biomass "~(g~m^2)), xlab="depth")
+```
+
+-Explore distribution of logged vs. unlogged data
+```{r}
+log.rb <- log(rb)
+par(mfrow=c(2,2))
+plot(density.default(x = rb)) #left-skewed 
+plot(density.default(x=log.rb)) #good 
+ia2$log.rb <- log(as.numeric(ia2$rb))
+```
+
+**Part 2: Statistical Analyses**
+
+-Define model and explore residuals
+```{r}
+ia.mod <- lmer(ia2$log.rb ~ as.factor(ia2$depth) * as.factor(ia2$age) * as.factor(ia2$nrate) + (1|ia2$block)) 
+par(mfrow=c(2,2))
+plot(ia.mod)
+qqnorm(resid(ia.mod)) 
+qqline(resid(ia.mod)) 
+```
+
+```{r}
+z <- car :: Anova(ia.mod)
+print(z)
+```
+
+-Anova summary into CSV
+-Pairwise comparisons 
+***Don't run unless you want to 
+  1) Rewrite .csv, which may or may not have edits
+  2) Wait for pairwise comps. to run which takes forever and output is useless (run chunk by chunk!)
+  
+```{r, eval=F, echo=T}}
+#write.csv(z, file = "E://results//ia_mxg_finebm_anova.csv")
+emmeans(ia.mod, pairwise ~ age) 
+emmeans(ia.mod, pairwise ~ depth)
+emmeans(ia.mod, pairwise ~ nrate) 
+emmeans(ia.mod, pairwise ~ nrate | age) 
+emmeans(ia.mod, pairwise ~ age | nrate)
+emmeans(ia.mod, pairwise ~ depth | age) 
+emmeans(ia.mod, pairwise ~ age | depth)
+```
+
+**Part 3: Data Summary Statistics and Visualization**
+
+*IND VARIABLE = ESTABLISHMENT YEAR*
+-Aggregate data by est. year
+-Plot
+```{r}
+ia.a <- ia2 %>% group_by(age) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+ggplot(ia.a, aes(x=age, y=mean))+
+  geom_col(position = "dodge")+theme_classic(base_size = 13)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_continuous("Planting year")+scale_y_continuous(expression("Fine root biomass  "(g/m^2)), breaks=seq(0,500,20), expand = c(0,0))
+```
+
+*IND VARIABLE = FERTILIZATION LEVEL*
+-Aggregate data by fertiization level
+-Plot
+```{r}
+ia.n <- ia2 %>% group_by(nrate) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+ggplot(ia.n, aes(x=nrate, y=mean))+
+  geom_col(position = "dodge")+theme_classic(base_size = 13)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_discrete(expression("Fertilization level "~(kg~ha^-1~yr)))+scale_y_continuous(expression("Fine root biomass  "(g/m^2)), breaks=seq(0,500,20), expand = c(0,0))
+```
+
+*IND VARIABLE = SOIL DEPTH INCREMENT*
+-Aggregate data by soil depth increment 
+-Plot 
+```{r}
+ia.n <- ia2 %>% group_by(depth) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+ggplot(ia.n, aes(x=depth, y=mean))+
+  geom_col(position = "dodge")+theme_classic(base_size = 13)+
+  geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.2)+
+  scale_x_discrete("Soil depth (cm)")+scale_y_continuous(expression("Fine root biomass  "(g/m^2)), breaks=seq(0,500,20), expand = c(0,0))
+```
+
+*IND VARIABLE = SOIL DEPTH INCREMENT X ESTABLISHMENT YEAR*
+-Aggregate data by soil depth x planting year
+-Plot 
+```{r}
+ia.da <- ia2 %>% group_by(depth, age) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+ggplot(ia.da, aes(x=as.factor(depth), y=mean, fill=(as.factor(age))))+
+geom_col(position="dodge")+theme_classic(base_size = 16)+
+geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4, position = pd)+
+    xlab("Soil depth (cm)")+scale_y_continuous(expression("Fine root biomass "~(g~m^-2)), breaks=seq(0,500,20), expand = c(0,0))+theme(legend.justification = "top")+theme(legend.background = element_rect(linetype = 1, size = 0.5, colour = 1))+scale_fill_manual(values = c("grey10","grey33", "grey91"),"Establishment year")
+```
+
+*IND VARIABLE = FERTILIZATION LEVEL X ESTABLISHMENT YEAR*
+-Aggregate data by fertilization level x ESTABLISHMENT year
+-Plot (two plots for this particular ind. variable combo, useful to see both ways!)
+```{r}
+ia.na <- ia2 %>% group_by(nrate, age) %>% summarize(mean = mean(as.numeric(rb)), 
+                                    se = se.error(rb), 
+                                    n = length(rb))
+
+ggplot(ia.na, aes(x=as.factor(nrate), y=mean, fill=(as.factor(age))))+
+geom_col(position="dodge")+theme_classic(base_size = 16)+
+geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4, position = pd)+
+    xlab(expression("Fertilization level "~(kg~ha^-1~yr)))+scale_y_continuous(expression("Fine root biomass "~(g~m^-2)), breaks=seq(0,500,20), expand = c(0,0))+theme(legend.justification = "top")+theme(legend.background = element_rect(linetype = 1, size = 0.5, colour = 1))+scale_fill_manual(values = c("gray10","grey33", "grey91"),"Establishment year")
+
+ggplot(ia.na, aes(x=as.factor(age), y=mean, fill=(as.factor(nrate))))+
+geom_col(position="dodge")+theme_classic(base_size = 16)+
+geom_errorbar(aes(ymin= mean-se, ymax=mean+se), color = "black", width=.4, position = pd)+
+    xlab("Establishment year")+scale_y_continuous(expression("Fine root biomass "~(g~m^-2)), breaks=seq(0,500,20), expand = c(0,0))+theme(legend.justification = "top")+theme(legend.background = element_rect(linetype = 1, size = 0.5, colour = 1))+scale_fill_manual(values = c("gray10","grey33", "grey91", "grey69", "grey52"), expression("Fertilization level "~(kg~ha^-1~yr)))
+```
+
+-Save summary stats as .csvs 
+***Don't run this unless you've made changes to .csvs that you WANT to save
+```{r, eval=F, echo=T}
+#write.csv(ia.all, file = "E://results//ia_mxg_bmF_all_means.csv")
+#write.csv(ia.a, file = "E://results//ia_mxg_bmF_age_means.csv")
+#write.csv(ia.n, file = "E://results//ia_mxg_bmF_nrate_means.csv")
+#write.csb(ia.d, file= "E://results//ia_mxg_bmF_depth_means.csv")
+```
+
+
